@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from backend.routers import claim, ai, auth
+from backend.routers import claim, ai, auth, dashboard
 from backend.routers.ai import preload_model
 from backend.models.database import init_db, get_conn
 from backend.ai.ollama import OLLAMA_URL, OLLAMA_MODEL
@@ -48,6 +48,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(claim.router)
 app.include_router(ai.router)
+app.include_router(dashboard.router)
 
 _BASE = Path(__file__).parent.parent
 (_BASE / "uploads").mkdir(exist_ok=True)
@@ -143,6 +144,10 @@ def cases_page():
 @app.get("/admin")
 def admin_page():
     return FileResponse(str(_BASE / "frontend" / "admin.html"))
+
+@app.get("/dashboard")
+def dashboard_page():
+    return FileResponse(str(_BASE / "frontend" / "dashboard.html"))
 
 @app.get("/logo.png")
 def logo():

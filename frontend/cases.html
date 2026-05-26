@@ -209,6 +209,56 @@
           <canvas id="supplierChart" height="60"></canvas>
         </div>
 
+        <!-- 클레임 처리 파이프라인 -->
+        <div style="background:#f8f9fa;border-radius:12px;padding:20px 24px;margin-top:20px;">
+          <div style="font-size:14px;font-weight:500;color:#2c2c2c;margin-bottom:16px;">클레임 처리 파이프라인 현황</div>
+          <div id="pipelineView" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;"></div>
+          <div id="pipelineStale"></div>
+        </div>
+
+        <!-- 차트 3행: 월별 불량률 시계열 -->
+        <div style="background:#f8f9fa;border-radius:12px;padding:20px 24px;margin-top:20px;">
+          <div style="font-size:14px;font-weight:500;color:#2c2c2c;margin-bottom:16px;">월별 불량률 추이 (불량수량 ÷ 납품수량)</div>
+          <canvas id="defectRateChart" height="80"></canvas>
+        </div>
+
+        <!-- 차트 4행: 불량 유형 월별 집중도 -->
+        <div style="background:#f8f9fa;border-radius:12px;padding:20px 24px;margin-top:20px;">
+          <div style="font-size:14px;font-weight:500;color:#2c2c2c;margin-bottom:16px;">불량 유형 월별 집중도</div>
+          <canvas id="defectTrendChart" height="90"></canvas>
+        </div>
+
+        <!-- 차트 4행: 고객사별 PPM -->
+        <div style="background:#f8f9fa;border-radius:12px;padding:20px 24px;margin-top:20px;">
+          <div style="font-size:14px;font-weight:500;color:#2c2c2c;margin-bottom:16px;">고객사별 PPM (불량률)</div>
+          <canvas id="ppmChart" height="60"></canvas>
+        </div>
+
+        <!-- 고객사별 클레임 랭킹 (불량수량 기준) -->
+        <div style="background:#f8f9fa;border-radius:12px;padding:20px 24px;margin-top:20px;">
+          <div style="font-size:14px;font-weight:500;color:#2c2c2c;margin-bottom:16px;">고객사별 클레임 랭킹 (불량 수량 합계)</div>
+          <div id="customerRanking"></div>
+        </div>
+
+        <!-- 시정조치 패턴 분석 -->
+        <div style="background:#f8f9fa;border-radius:12px;padding:20px 24px;margin-top:20px;">
+          <div style="font-size:14px;font-weight:500;color:#2c2c2c;margin-bottom:16px;">시정조치 키워드 패턴</div>
+          <canvas id="actionKeywordChart" height="70"></canvas>
+        </div>
+
+        <!-- 클레임 처리 소요 시간 -->
+        <div style="background:#f8f9fa;border-radius:12px;padding:20px 24px;margin-top:20px;">
+          <div style="font-size:14px;font-weight:500;color:#2c2c2c;margin-bottom:16px;">클레임 처리 소요 시간 분포</div>
+          <div id="processingTimeStats" style="display:flex;gap:12px;margin-bottom:14px;flex-wrap:wrap;"></div>
+          <canvas id="processingTimeChart" height="70"></canvas>
+        </div>
+
+        <!-- 시정조치 재발 검증 -->
+        <div style="background:#f8f9fa;border-radius:12px;padding:20px 24px;margin-top:20px;">
+          <div style="font-size:14px;font-weight:500;color:#2c2c2c;margin-bottom:16px;">시정조치 재발 검증</div>
+          <div id="recurrenceTable"></div>
+        </div>
+
       </div>
     </div>
 
@@ -255,9 +305,24 @@
     function doLogout() { sessionStorage.removeItem('user'); location.href = '/'; }
 
     let allCases = [];
+    let allReports = [];
 
     async function loadCases() {
-      const data = await apiFetch('/api/reports/?status=approved&limit=100');
+      const [data, allData] = await Promise.all([
+        apiFetch('/api/reports/?status=approved&limit=100'),
+        apiFetch('/api/reports/?limit=200'),
+      ]);
+      if (allData && allData.items) {
+        allReports = allData.items.map(item => ({
+          id:            item.report_id,
+          date:          (item.received_date || '').slice(0, 10),
+          report_status: item.report_status || 'draft',
+          supplier:      item.customer_name || '-',
+          defect_type:   item.defect_type || '',
+          handler:       item.handler || '-',
+          document_no:   item.document_no || '',
+        }));
+      }
       if (data && data.items) {
         allCases = data.items.map(item => ({
           id:           item.report_id,
@@ -285,6 +350,8 @@
     }
 
     let periodChartInst = null, defectChartInst = null, supplierChartInst = null, currentPeriod = 'monthly';
+    let defectTrendChartInst = null, ppmChartInst = null, defectRateChartInst = null;
+    let actionKeywordChartInst = null, processingTimeChartInst = null;
 
     function switchCasesTab(name, btn) {
       document.getElementById('tab-cases').style.display = name === 'cases' ? 'block' : 'none';
@@ -460,6 +527,313 @@
           scales: { x: { beginAtZero:true, ticks:{ stepSize:1 } } }
         }
       });
+
+      // ── 클레임 처리 파이프라인 ──
+      const statusLabels = { draft:'작성중', submitted:'제출됨', approved:'승인', rejected:'반려' };
+      const statusColors = { draft:'#78909c', submitted:'#1a4fa0', approved:'#2e7d32', rejected:'#c62828' };
+      const statusCounts = { draft:0, submitted:0, approved:0, rejected:0 };
+      allReports.forEach(r => { if (statusCounts[r.report_status] !== undefined) statusCounts[r.report_status]++; });
+      const totalReports = allReports.length || 1;
+
+      let pipeHTML = '';
+      ['draft','submitted','approved','rejected'].forEach((st, i) => {
+        const cnt = statusCounts[st];
+        const pct = Math.round(cnt / totalReports * 100);
+        const arrow = i < 3 ? '<span style="font-size:20px;color:#ccc;align-self:center;">→</span>' : '';
+        pipeHTML += `<div style="flex:1;min-width:110px;background:#fff;border-radius:10px;border:2px solid ${statusColors[st]};padding:14px 16px;text-align:center;">
+          <div style="font-size:11px;color:${statusColors[st]};font-weight:600;margin-bottom:4px;">${statusLabels[st]}</div>
+          <div style="font-size:26px;font-weight:700;color:${statusColors[st]};">${cnt}</div>
+          <div style="font-size:11px;color:#aaa;">${pct}%</div>
+        </div>${arrow}`;
+      });
+      document.getElementById('pipelineView').innerHTML = pipeHTML;
+
+      const today = new Date();
+      const staleItems = allReports.filter(r => {
+        if (r.report_status === 'approved' || r.report_status === 'rejected') return false;
+        if (!r.date) return false;
+        const days = Math.floor((today - new Date(r.date)) / 86400000);
+        return days >= 7;
+      }).map(r => {
+        const days = Math.floor((today - new Date(r.date)) / 86400000);
+        return { ...r, days };
+      }).sort((a, b) => b.days - a.days);
+
+      if (staleItems.length > 0) {
+        let staleHTML = '<div style="font-size:12px;font-weight:600;color:#c62828;margin-bottom:8px;">⚠ 7일 이상 미처리 건</div>';
+        staleHTML += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
+        staleHTML += '<thead><tr style="background:#ffebee;"><th style="padding:6px 10px;text-align:left;">문서번호</th><th style="padding:6px 10px;text-align:left;">고객사</th><th style="padding:6px 10px;text-align:center;">상태</th><th style="padding:6px 10px;text-align:center;">경과일</th><th style="padding:6px 10px;text-align:left;">담당자</th></tr></thead><tbody>';
+        staleItems.slice(0, 10).forEach(r => {
+          const urgency = r.days >= 14 ? 'color:#c62828;font-weight:700;' : 'color:#e65100;';
+          staleHTML += `<tr style="border-bottom:1px solid #f0f0f0;">
+            <td style="padding:6px 10px;">${r.document_no || '-'}</td>
+            <td style="padding:6px 10px;">${r.supplier}</td>
+            <td style="padding:6px 10px;text-align:center;">${statusLabels[r.report_status] || r.report_status}</td>
+            <td style="padding:6px 10px;text-align:center;${urgency}">${r.days}일</td>
+            <td style="padding:6px 10px;">${r.handler}</td>
+          </tr>`;
+        });
+        staleHTML += '</tbody></table>';
+        document.getElementById('pipelineStale').innerHTML = staleHTML;
+      } else {
+        document.getElementById('pipelineStale').innerHTML = '<div style="font-size:12px;color:#2e7d32;">✓ 7일 이상 미처리 건 없음</div>';
+      }
+
+      // ── 월별 불량률 시계열 라인 차트 ──
+      const rateByMonth = {};
+      allCases.filter(c => !selectedYear || c.date.slice(0,4) === selectedYear).forEach(c => {
+        const m = c.date.slice(5,7);
+        if (!rateByMonth[m]) rateByMonth[m] = { defect: 0, delivery: 0 };
+        rateByMonth[m].defect += (c.defect_quantity || 0);
+        rateByMonth[m].delivery += (c.delivery_quantity || 0);
+      });
+      const rateMonths = [];
+      for (let m = 1; m <= 12; m++) rateMonths.push(String(m).padStart(2,'0'));
+      const rateData = rateMonths.map(m => {
+        const v = rateByMonth[m];
+        if (!v || v.delivery === 0) return null;
+        return parseFloat((v.defect / v.delivery * 100).toFixed(2));
+      });
+      if (defectRateChartInst) defectRateChartInst.destroy();
+      defectRateChartInst = new Chart(document.getElementById('defectRateChart'), {
+        type: 'line',
+        data: {
+          labels: rateMonths.map(m => parseInt(m)+'월'),
+          datasets: [{
+            label: '불량률 (%)',
+            data: rateData,
+            borderColor: '#c0392b',
+            backgroundColor: 'rgba(192,57,43,0.08)',
+            fill: true,
+            tension: 0.3,
+            pointRadius: 4,
+            pointBackgroundColor: '#c0392b',
+            spanGaps: true,
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { display: false } },
+          scales: {
+            y: { beginAtZero: true, title: { display: true, text: '불량률 (%)' },
+              ticks: { callback: v => v + '%' } }
+          }
+        }
+      });
+
+      // ── 불량 유형 월별 집중도 (스택 막대) ──
+      const trendColors = {
+        'OUTER_DAMAGE':'#c0392b','SEALING':'#1a4fa0','HEMMING':'#a06010',
+        'HOLE_DEFORM':'#1e6e3e','GAP_DEFECT':'#7b2d8b','FASTENING_DEFECT':'#006f9e'
+      };
+      const yearFilter = allCases.filter(c => !selectedYear || c.date.slice(0,4) === selectedYear);
+      const trendMonths = [];
+      for (let m = 1; m <= 12; m++) trendMonths.push(String(m).padStart(2,'0'));
+      const activeTypes = [...new Set(yearFilter.map(c => c.defect_type).filter(Boolean))];
+      const trendDatasets = activeTypes.map(dt => {
+        const counts = trendMonths.map(m =>
+          yearFilter.filter(c => c.date.slice(5,7) === m && c.defect_type === dt).length
+        );
+        return {
+          label: DEFECT_LABELS[dt] || dt,
+          data: counts,
+          backgroundColor: trendColors[dt] || '#999',
+          borderRadius: 3,
+        };
+      });
+      if (defectTrendChartInst) defectTrendChartInst.destroy();
+      defectTrendChartInst = new Chart(document.getElementById('defectTrendChart'), {
+        type: 'bar',
+        data: { labels: trendMonths.map(m => parseInt(m)+'월'), datasets: trendDatasets },
+        options: {
+          responsive: true,
+          plugins: { legend: { position:'bottom', labels:{ padding:12, font:{ size:12 } } } },
+          scales: { x:{ stacked:true }, y:{ stacked:true, beginAtZero:true, ticks:{ stepSize:1 } } }
+        }
+      });
+
+      // ── 고객사별 PPM ──
+      const ppmByCustomer = {};
+      allCases.forEach(c => {
+        if (!c.supplier || !c.delivery_quantity) return;
+        if (!ppmByCustomer[c.supplier]) ppmByCustomer[c.supplier] = { defect: 0, delivery: 0 };
+        ppmByCustomer[c.supplier].defect += (c.defect_quantity || 0);
+        ppmByCustomer[c.supplier].delivery += (c.delivery_quantity || 0);
+      });
+      const ppmEntries = Object.entries(ppmByCustomer)
+        .map(([name, v]) => ({ name, ppm: v.delivery > 0 ? Math.round(v.defect / v.delivery * 1000000) : 0 }))
+        .filter(e => e.ppm > 0)
+        .sort((a, b) => b.ppm - a.ppm)
+        .slice(0, 8);
+      if (ppmChartInst) ppmChartInst.destroy();
+      ppmChartInst = new Chart(document.getElementById('ppmChart'), {
+        type: 'bar',
+        data: {
+          labels: ppmEntries.map(e => e.name),
+          datasets: [{
+            label: 'PPM',
+            data: ppmEntries.map(e => e.ppm),
+            backgroundColor: ppmEntries.map(e => e.ppm >= 50000 ? '#c0392b' : e.ppm >= 20000 ? '#ef9f27' : '#0d6b6c'),
+            borderRadius: 6,
+          }]
+        },
+        options: {
+          indexAxis: 'y', responsive: true,
+          plugins: { legend: { display:false },
+            tooltip: { callbacks: { label: ctx => ctx.raw.toLocaleString() + ' PPM' } }
+          },
+          scales: { x: { beginAtZero:true, title:{ display:true, text:'PPM (백만분율)' } } }
+        }
+      });
+
+      // ── 고객사별 클레임 랭킹 ──
+      const rankMap = {};
+      allCases.forEach(c => {
+        if (!c.supplier) return;
+        if (!rankMap[c.supplier]) rankMap[c.supplier] = { total: 0, defectQty: 0 };
+        rankMap[c.supplier].total += 1;
+        rankMap[c.supplier].defectQty += (Number(c.defect_quantity) || 0);
+      });
+      const rankRows = Object.entries(rankMap)
+        .map(([name, v]) => ({ name, ...v }))
+        .sort((a, b) => b.defectQty - a.defectQty);
+      let rankHTML = '<table style="width:100%;border-collapse:collapse;font-size:13px;">';
+      rankHTML += '<thead><tr style="background:#e8f0fe;"><th style="padding:8px 12px;text-align:center;">순위</th><th style="padding:8px 12px;text-align:left;">고객사</th><th style="padding:8px 12px;text-align:center;">클레임 건수</th><th style="padding:8px 12px;text-align:center;">불량 수량 합계</th></tr></thead><tbody>';
+      if (rankRows.length === 0) {
+        rankHTML += '<tr><td colspan="4" style="padding:16px;text-align:center;color:#aaa;">데이터 없음</td></tr>';
+      } else {
+        rankRows.forEach((r, i) => {
+          const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : (i + 1);
+          rankHTML += `<tr style="border-bottom:1px solid #f0f0f0;${i < 3 ? 'font-weight:500;' : ''}">
+            <td style="padding:8px 12px;text-align:center;">${medal}</td>
+            <td style="padding:8px 12px;">${r.name}</td>
+            <td style="padding:8px 12px;text-align:center;">${r.total}건</td>
+            <td style="padding:8px 12px;text-align:center;color:#c62828;font-weight:600;">${r.defectQty.toLocaleString()} EA</td>
+          </tr>`;
+        });
+      }
+      rankHTML += '</tbody></table>';
+      document.getElementById('customerRanking').innerHTML = rankHTML;
+
+      // ── 시정조치 키워드 패턴 ──
+      const stopWords = new Set(['및','등','후','의','에','를','을','이','가','한','된','로','으로','하여','대한','위해','통해']);
+      const kwCount = {};
+      allCases.forEach(c => {
+        const text = (c.action || '') + ' ' + (c.prevention || '');
+        text.replace(/[^가-힣a-zA-Z0-9\s]/g, ' ')
+            .split(/\s+/)
+            .filter(w => w.length >= 2 && !stopWords.has(w))
+            .forEach(w => { kwCount[w] = (kwCount[w] || 0) + 1; });
+      });
+      const topKw = Object.entries(kwCount).sort((a,b) => b[1] - a[1]).slice(0, 15);
+      if (actionKeywordChartInst) actionKeywordChartInst.destroy();
+      actionKeywordChartInst = new Chart(document.getElementById('actionKeywordChart'), {
+        type: 'bar',
+        data: {
+          labels: topKw.map(k => k[0]),
+          datasets: [{ data: topKw.map(k => k[1]),
+            backgroundColor: 'rgba(13,107,108,0.7)', borderRadius: 4 }]
+        },
+        options: {
+          indexAxis: 'y', responsive: true,
+          plugins: { legend: { display: false } },
+          scales: { x: { beginAtZero: true, ticks: { stepSize: 1 } } }
+        }
+      });
+
+      // ── 클레임 처리 소요 시간 ──
+      {
+      const durations = [];
+      const nowDate = new Date();
+      allCases.forEach(c => {
+        if (!c.date) return;
+        const days = Math.floor((nowDate - new Date(c.date)) / 86400000);
+        if (days >= 0 && days < 365) durations.push(days);
+      });
+      const bins = [0,7,14,30,60,90,180,365];
+      const binLabels = ['~7일','~14일','~30일','~60일','~90일','~180일','180일+'];
+      const binCounts = new Array(binLabels.length).fill(0);
+      durations.forEach(d => {
+        for (let i = 0; i < bins.length - 1; i++) {
+          if (d >= bins[i] && d < bins[i+1]) { binCounts[i]++; break; }
+        }
+      });
+      const avg = durations.length ? (durations.reduce((s,v) => s+v, 0) / durations.length).toFixed(1) : '-';
+      const dSorted = [...durations].sort((a,b) => a - b);
+      const median = dSorted.length ? dSorted[Math.floor(dSorted.length / 2)] : '-';
+      const maxD = dSorted.length ? dSorted[dSorted.length - 1] : '-';
+      document.getElementById('processingTimeStats').innerHTML = `
+        <div style="background:#fff;border:1px solid #e0e0e0;border-radius:10px;padding:12px 18px;text-align:center;">
+          <div style="font-size:11px;color:#888;">평균</div><div style="font-size:20px;font-weight:500;color:#0d6b6c;">${avg}일</div>
+        </div>
+        <div style="background:#fff;border:1px solid #e0e0e0;border-radius:10px;padding:12px 18px;text-align:center;">
+          <div style="font-size:11px;color:#888;">중앙값</div><div style="font-size:20px;font-weight:500;color:#2c2c2c;">${median}일</div>
+        </div>
+        <div style="background:#fff;border:1px solid #e0e0e0;border-radius:10px;padding:12px 18px;text-align:center;">
+          <div style="font-size:11px;color:#888;">최장</div><div style="font-size:20px;font-weight:500;color:#c62828;">${maxD}일</div>
+        </div>`;
+      if (processingTimeChartInst) processingTimeChartInst.destroy();
+      processingTimeChartInst = new Chart(document.getElementById('processingTimeChart'), {
+        type: 'bar',
+        data: {
+          labels: binLabels,
+          datasets: [{ data: binCounts,
+            backgroundColor: binLabels.map((_,i) => i < 2 ? '#4caf50' : i < 4 ? '#ff9800' : '#ef5350'),
+            borderRadius: 4 }]
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { display: false } },
+          scales: { y: { beginAtZero: true, ticks: { stepSize: 1 }, title: { display: true, text: '건수' } },
+                    x: { title: { display: true, text: '경과 일수' } } }
+        }
+      });
+      }
+
+      // ── 재발 불량 감지 (고객사 + 불량유형 조합) ──
+      const comboMap = {};
+      allCases.forEach(c => {
+        if (!c.defect_type || !c.supplier) return;
+        const key = c.supplier + '||' + c.defect_type;
+        if (!comboMap[key]) comboMap[key] = [];
+        comboMap[key].push(c);
+      });
+      const combos = Object.entries(comboMap)
+        .map(([key, cases]) => {
+          const [supplier, dt] = key.split('||');
+          cases.sort((a, b) => new Date(a.date) - new Date(b.date));
+          const withAction = cases.filter(c => c.action && c.action.trim());
+          const firstAction = withAction[0];
+          const recurrences = firstAction
+            ? cases.filter(c => c.date > firstAction.date).length : 0;
+          return { supplier, dt, total: cases.length, actionCount: withAction.length, recurrences };
+        })
+        .filter(c => c.total >= 2)
+        .sort((a, b) => b.recurrences - a.recurrences || b.total - a.total);
+
+      let recHTML = '<table style="width:100%;border-collapse:collapse;font-size:13px;">';
+      recHTML += '<thead><tr style="background:#e8f0fe;"><th style="padding:8px 12px;text-align:left;">고객사</th><th style="padding:8px 12px;text-align:left;">불량 유형</th><th style="padding:8px 12px;text-align:center;">총 건수</th><th style="padding:8px 12px;text-align:center;">시정조치</th><th style="padding:8px 12px;text-align:center;">이후 재발</th><th style="padding:8px 12px;text-align:center;">판정</th></tr></thead><tbody>';
+      if (combos.length === 0) {
+        recHTML += '<tr><td colspan="6" style="padding:16px;text-align:center;color:#aaa;">반복 클레임 조합이 없습니다.</td></tr>';
+      } else {
+        combos.forEach(c => {
+          const badge = c.recurrences > 0
+            ? '<span style="display:inline-block;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600;background:#ffebee;color:#c62828;">재발</span>'
+            : c.actionCount > 0
+            ? '<span style="display:inline-block;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600;background:#e8f5e9;color:#2e7d32;">조치 유효</span>'
+            : '<span style="display:inline-block;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600;background:#fff3e0;color:#e65100;">미조치 반복</span>';
+          recHTML += `<tr style="border-bottom:1px solid #f0f0f0;">
+            <td style="padding:8px 12px;">${c.supplier}</td>
+            <td style="padding:8px 12px;">${DEFECT_LABELS[c.dt] || c.dt}</td>
+            <td style="padding:8px 12px;text-align:center;">${c.total}건</td>
+            <td style="padding:8px 12px;text-align:center;">${c.actionCount}건</td>
+            <td style="padding:8px 12px;text-align:center;font-weight:600;color:${c.recurrences > 0 ? '#c62828':'#2e7d32'};">${c.recurrences}건</td>
+            <td style="padding:8px 12px;text-align:center;">${badge}</td>
+          </tr>`;
+        });
+      }
+      recHTML += '</tbody></table>';
+      document.getElementById('recurrenceTable').innerHTML = recHTML;
     }
 
     function setDefectTab(code, btn) {

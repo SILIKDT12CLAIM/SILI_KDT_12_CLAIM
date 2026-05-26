@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>공장 라인 모니터 · 클레임 대응 시스템</title>
+<link rel="stylesheet" href="css/style.css" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
+<style>
+  :root {
+    --clr-text: #1a1a1a;
+    --clr-text2: #666;
+    --clr-bg: #f0eeea;
+    --clr-card: #fff;
+    --clr-card2: #f5f5f3;
+    --clr-border: rgba(0,0,0,0.12);
+    --clr-border2: rgba(0,0,0,0.22);
+    --rad-md: 8px;
+    --rad-lg: 12px;
+  }
+  .dash-body {
+    max-width: 1100px; margin: 0 auto; padding: 0 1rem 2rem;
+  }
+
+  /* 상단 컨트롤 */
+  .ctrl-row {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 1.2rem; flex-wrap: wrap;
+  }
+  .ctrl-row label { font-size: 13px; font-weight: 600; color: #555; }
+  .ctrl-row select {
+    padding: 5px 10px; border-radius: var(--rad-md); border: 1px solid #ccc;
+    font-size: 12px; background: #fff;
+  }
+  .btn {
+    font-size: 11px; padding: 4px 10px;
+    border: 0.5px solid var(--clr-border2);
+    border-radius: var(--rad-md);
+    background: transparent; color: var(--clr-text2); cursor: pointer;
+  }
+  .btn:hover { background: var(--clr-card2); }
+  .last-ts { font-size: 11px; color: #aaa; margin-left: auto; }
+
+  /* 요약 카드 */
+  .sum-row { display: flex; gap: 10px; margin-bottom: 1.2rem; flex-wrap: wrap; }
+  .sum-card {
+    flex: 1; min-width: 120px; background: var(--clr-card);
+    border: 0.5px solid var(--clr-border); border-radius: var(--rad-lg);
+    padding: 14px 16px; border-left: 4px solid #1a4fa0;
+  }
+  .sum-card.crit  { border-left-color: #e24b4a; }
+  .sum-card.warn  { border-left-color: #ef9f27; }
+  .sum-card.norm  { border-left-color: #639922; }
+  .sum-label { font-size: 11px; color: var(--clr-text2); margin-bottom: 2px; }
+  .sum-value { font-size: 24px; font-weight: 700; color: var(--clr-text); }
+
+  /* 라인 카드 */
+  .line-card {
+    background: var(--clr-card); border: 0.5px solid var(--clr-border);
+    border-radius: var(--rad-lg); padding: 1.25rem 1.5rem;
+  }
+  .line-card .title-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
+  .line-card .title-row h2 { font-size: 15px; font-weight: 500; color: var(--clr-text); }
+
+  /* 씬: 공정별 컬럼 */
+  .scene-outer {
+    display: flex; gap: 24px; justify-content: center; overflow-x: auto;
+    padding-bottom: 8px;
+    transform: perspective(700px) rotateX(16deg); transform-origin: 50% 20%;
+  }
+  .proc-col { display: flex; flex-direction: column; align-items: center; gap: 6px; flex: 1; min-width: 100px; max-width: 180px; }
+  .proc-label { font-size: 12px; font-weight: 600; color: var(--clr-text2); }
+
+  /* 벨트 */
+  .belt-wrap { position: relative; width: 64px; overflow: visible; }
+  .binner {
+    position: absolute; inset: 0; border-radius: 6px;
+    overflow: hidden; border: 1.5px solid #888;
+  }
+  .belt-bg {
+    position: absolute; inset: 0;
+    background: repeating-linear-gradient(180deg,#bbb 0px,#bbb 10px,#999 10px,#999 20px);
+    opacity: 0.15;
+  }
+  .rail-l, .rail-r { position: absolute; top: 0; bottom: 0; width: 5px; background: #aaa; opacity: .5; }
+  .rail-l { left: 0; } .rail-r { right: 0; }
+
+  /* 아이템 */
+  .item {
+    position: absolute; left: 50%; transform: translateX(-50%);
+    width: 20px; height: 20px; border-radius: 3px;
+    background: #d0d0d0; border: 1.5px solid #999; z-index: 5;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .item i { font-size: 9px; color: #666; }
+  .item.ok  { background: #c0dd97; border-color: #639922; }
+  .item.ok i { color: #3b6d11; }
+  .item.bad { background: #f09595; border-color: #a32d2d; }
+  .item.bad i { color: #791f1f; }
+  @keyframes sv { from { top: -24px; } to { top: calc(100% + 24px); } }
+
+  /* 설비 노드 */
+  .mach {
+    position: absolute; left: -14px; right: -14px; height: 28px; z-index: 20;
+    border-radius: 4px; display: flex; align-items: center; justify-content: space-between;
+    padding: 0 7px; cursor: pointer;
+    background: rgba(140,140,140,0.13); border: 1.5px solid rgba(140,140,140,0.4);
+    transition: background .15s, border-color .25s;
+  }
+  .mach:hover { background: rgba(140,140,140,0.22); }
+  .mach.ok-flash  { background: #c0dd97; border-color: #639922; }
+  .mach.bad-flash { background: #f09595; border-color: #a32d2d; }
+  .mach-dot {
+    position: absolute; left: -18px; top: 50%; transform: translateY(-50%);
+    width: 11px; height: 11px; border-radius: 50%;
+    border: 1.5px solid rgba(0,0,0,0.18); transition: background .4s;
+  }
+  @keyframes badpulse {
+    0%   { transform: translateY(-50%) scale(1); }
+    25%  { transform: translateY(-50%) scale(2); }
+    50%  { transform: translateY(-50%) scale(1.2); }
+    75%  { transform: translateY(-50%) scale(1.7); }
+    100% { transform: translateY(-50%) scale(1); }
+  }
+  .mach-dot.bad-alert { animation: badpulse .45s ease-in-out; }
+  .mach-name { font-size: 9px; font-weight: 500; color: var(--clr-text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 52px; }
+  .mach-rate { font-size: 9px; font-weight: 500; color: var(--clr-text2); }
+
+  /* 상세 패널 */
+  .detail-panel {
+    margin-top: 1rem;
+    background: var(--clr-card2); border: 0.5px solid var(--clr-border);
+    border-radius: var(--rad-lg); padding: 1rem 1.25rem; min-height: 60px;
+  }
+  .dp-title { font-size: 13px; font-weight: 600; color: var(--clr-text); margin-bottom: .5rem; }
+  .dp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+  .dp-cell {
+    background: var(--clr-card); border: 0.5px solid var(--clr-border);
+    border-radius: var(--rad-md); padding: .5rem .6rem;
+  }
+  .dp-cell.active { border-width: 1.5px; }
+  .dp-pname { font-size: 10px; color: var(--clr-text2); margin-bottom: 2px; }
+  .dp-num { font-size: 18px; font-weight: 600; }
+  .dp-sub { font-size: 10px; color: var(--clr-text2); }
+  .dp-bar-wrap { margin-top: 4px; height: 4px; background: var(--clr-card2); border-radius: 2px; overflow: hidden; }
+  .dp-bar { height: 100%; border-radius: 2px; transition: width .4s; }
+  .hint { font-size: 12px; color: var(--clr-text2); }
+
+  /* 미니 테이블 */
+  .dp-section { margin-top: .8rem; }
+  .dp-section h4 { font-size: 12px; font-weight: 600; color: #1a4fa0; margin-bottom: .4rem; border-bottom: 1px solid var(--clr-border); padding-bottom: 4px; }
+  .mini-tbl { width: 100%; border-collapse: collapse; font-size: 11px; }
+  .mini-tbl th { background: var(--clr-card2); padding: 4px 6px; text-align: left; font-weight: 600; }
+  .mini-tbl td { padding: 4px 6px; border-bottom: 1px solid #f0f0f0; }
+  .badge-s { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; }
+  .badge-s.OK { background: #e8f5e9; color: #2e7d32; }
+  .badge-s.NG { background: #ffebee; color: #c62828; }
+
+  /* 범례 */
+  .legend {
+    max-width: 1100px; margin: .8rem auto 0; padding: 0 1rem;
+    display: flex; gap: 12px; flex-wrap: wrap; align-items: center;
+  }
+  .legend-item { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--clr-text2); }
+  .legend-dot { width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid rgba(0,0,0,0.15); }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="logo-area">
+    <img src="logo.png" class="logo-icon" alt="로고" />
+    <div>
+      <div class="logo-title">납품 불량 클레임 대응 시스템</div>
+      <div class="logo-sub">AJIN INDUSTRIAL · QA 관리 시스템</div>
+    </div>
+  </div>
+  <div class="user-info">
+    <div class="user-avatar" id="userAvatar">홍</div>
+    <div>
+      <div class="user-name" id="userName">홍길동 담당자</div>
+      <div class="user-team">품질보증팀</div>
+    </div>
+    <button class="logout-btn" onclick="location.href='/hub'" style="margin-right:6px;background:#e8f5f5;color:#0a4e4f;border:1px solid #b2dfdb;">메인</button>
+    <button class="logout-btn" onclick="doLogout()">로그아웃</button>
+  </div>
+</div>
+
+<main class="main">
+<div class="dash-body">
+
+  <div class="ctrl-row">
+    <label>조회 기간</label>
+    <select id="periodDays">
+      <option value="7">최근 7일</option>
+      <option value="14">최근 14일</option>
+      <option value="30" selected>최근 30일</option>
+      <option value="60">최근 60일</option>
+      <option value="90">최근 90일</option>
+    </select>
+    <button class="btn" onclick="loadDashboard()"><i class="ti ti-refresh"></i> 새로고침</button>
+    <span class="last-ts" id="lastTs"></span>
+  </div>
+
+  <div class="sum-row" id="sumRow"></div>
+
+  <div class="line-card">
+    <div class="title-row">
+      <h2 id="lineTitle">프레임 생산라인 A</h2>
+      <button class="btn" onclick="loadDashboard()"><i class="ti ti-refresh"></i> 초기화</button>
+    </div>
+    <div class="scene-outer" id="scene">
+      <p class="hint">데이터 로딩 중...</p>
+    </div>
+    <div class="detail-panel" id="dpanel">
+      <p class="hint">설비를 클릭하면 공정별 상세 정보를 볼 수 있습니다.</p>
+    </div>
+  </div>
+
+</div>
+</main>
+
+<div class="legend">
+  <span style="font-size:11px;color:var(--clr-text2);font-weight:500;">상태 범례 :</span>
+  <div class="legend-item"><div class="legend-dot" style="background:#639922"></div> 정상 (NG&lt;5%)</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#ef9f27"></div> 주의 (NG&lt;10%)</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#e24b4a"></div> 위험 (NG≥10% 또는 클레임≥5)</div>
+</div>
+
+<footer class="footer">
+  <div class="footer-left">© 2026 경북대 KDT 12기 · SILI 경진대회</div>
+  <div class="footer-status">
+    <span class="status-dot"></span>
+    서버 연결 확인 중...
+  </div>
+</footer>
+
+<script src="js/main.js"></script>
+<script>
+const user = JSON.parse(sessionStorage.getItem('user'));
+if (!user?.token) { location.href = '/'; }
+else {
+  document.getElementById('userAvatar').textContent = user.name.charAt(0);
+  document.getElementById('userName').textContent = user.name + ' 담당자';
+}
+function doLogout() { sessionStorage.removeItem('user'); location.href = '/'; }
+
+const DEFECT_KR = {
+  HEMMING:'헤밍', HOLE_DEFORM:'홀변형', OUTER_DAMAGE:'외관손상',
+  SEALING:'실링', GAP_DEFECT:'간격', FASTENING_DEFECT:'체결'
+};
+const STATUS_KR = { draft:'작성중', submitted:'제출', approved:'승인', rejected:'반려' };
+
+const SPD = 8000;
+let layout = null;
+let equipMap = {};
+let procCols = [];
+let bwraps = [], machEls = [], dotEls = [];
+
+function riskColor(ngRate, claimCount) {
+  if (ngRate >= 0.10 || claimCount >= 5) return '#e24b4a';
+  if (ngRate >= 0.05 || claimCount >= 2) return '#ef9f27';
+  return '#639922';
+}
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+async function loadDashboard() {
+  const days = document.getElementById('periodDays').value;
+  const [lay, st] = await Promise.all([
+    apiFetch('/api/dashboard/line-layout'),
+    apiFetch('/api/dashboard/equipment-status?days=' + days),
+  ]);
+  if (!lay || !st) return;
+  layout = lay;
+  equipMap = {};
+  (st.equipment || []).forEach(e => { equipMap[e.equipment_id] = e; });
+
+  document.getElementById('lineTitle').textContent = lay.line_name || '생산라인';
+  renderSummary(st.equipment || []);
+  buildScene(lay);
+  startBelts();
+  document.getElementById('lastTs').textContent = '마지막 갱신: ' + new Date().toLocaleTimeString('ko-KR');
+}
+
+function renderSummary(equips) {
+  const tot = equips.length;
+  const cr = equips.filter(e => e.status === 'critical').length;
+  const wr = equips.filter(e => e.status === 'warning').length;
+  const nr = equips.filter(e => e.status === 'normal').length;
+  const claims = equips.reduce((s, e) => s + e.claim_count, 0);
+  document.getElementById('sumRow').innerHTML = `
+    <div class="sum-card"><div class="sum-label">전체 설비</div><div class="sum-value">${tot}</div></div>
+    <div class="sum-card crit"><div class="sum-label">위험</div><div class="sum-value" style="color:#e24b4a">${cr}</div></div>
+    <div class="sum-card warn"><div class="sum-label">주의</div><div class="sum-value" style="color:#ef9f27">${wr}</div></div>
+    <div class="sum-card norm"><div class="sum-label">정상</div><div class="sum-value" style="color:#639922">${nr}</div></div>
+    <div class="sum-card"><div class="sum-label">기간 내 클레임</div><div class="sum-value">${claims}</div></div>
+  `;
+}
+
+function buildScene(lay) {
+  const sc = document.getElementById('scene');
+  sc.innerHTML = '';
+  bwraps = []; machEls = []; dotEls = []; procCols = [];
+  const procs = lay.processes || [];
+
+  procs.forEach((proc, pi) => {
+    const col = document.createElement('div');
+    col.className = 'proc-col';
+
+    const lbl = document.createElement('div');
+    lbl.className = 'proc-label';
+    lbl.textContent = proc.process_name;
+    col.appendChild(lbl);
+
+    const eqs = proc.equipment || [];
+    const beltH = Math.max(200, eqs.length * 90 + 60);
+
+    const bw = document.createElement('div');
+    bw.className = 'belt-wrap';
+    bw.style.height = beltH + 'px';
+
+    const bi = document.createElement('div');
+    bi.className = 'binner';
+    bi.innerHTML = '<div class="belt-bg"></div><div class="rail-l"></div><div class="rail-r"></div>';
+    bw.appendChild(bi);
+
+    const mRow = [], dRow = [];
+    eqs.forEach((eq, ei) => {
+      const info = equipMap[eq.equipment_id] || {};
+      const pct = (ei + 1) / (eqs.length + 1);
+      const topPx = Math.round(pct * beltH) - 14;
+
+      const m = document.createElement('div');
+      m.className = 'mach';
+      m.style.top = topPx + 'px';
+
+      const dot = document.createElement('span');
+      dot.className = 'mach-dot';
+      dot.style.background = riskColor(info.ng_rate || 0, info.claim_count || 0);
+
+      const nm = document.createElement('span');
+      nm.className = 'mach-name';
+      nm.textContent = eq.equipment_id;
+      nm.title = eq.name;
+
+      const rt = document.createElement('span');
+      rt.className = 'mach-rate';
+      const ngPct = info.ng_rate != null ? Math.round(info.ng_rate * 100) : 0;
+      rt.textContent = ngPct + '%';
+
+      m.appendChild(dot); m.appendChild(nm); m.appendChild(rt);
+      m.addEventListener('click', () => openDetail(eq.equipment_id));
+      bw.appendChild(m);
+      mRow.push({ el: m, eq, pct });
+      dRow.push(dot);
+    });
+
+    machEls.push(mRow);
+    dotEls.push(dRow);
+    bwraps.push({ bw, bi, beltH, eqs });
+    col.appendChild(bw);
+    sc.appendChild(col);
+    procCols.push(proc);
+  });
+}
+
+function spawnItem(pi) {
+  const { bi, beltH, eqs } = bwraps[pi];
+  const itm = document.createElement('div');
+  itm.className = 'item';
+  itm.innerHTML = '<i class="ti ti-square-rounded"></i>';
+  itm.style.cssText = 'top:-24px;animation:sv ' + SPD + 'ms linear forwards';
+  bi.appendChild(itm);
+
+  machEls[pi].forEach((mObj, ei) => {
+    const info = equipMap[mObj.eq.equipment_id] || {};
+    const machY = mObj.pct * beltH;
+    const t = Math.round(SPD * (machY + 14) / (beltH + 48));
+
+    setTimeout(() => {
+      if (!document.body.contains(itm)) return;
+      const ngRate = info.ng_rate || 0;
+      const isBad = Math.random() < ngRate;
+      if (isBad) {
+        itm.className = 'item bad';
+        itm.innerHTML = '<i class="ti ti-x"></i>';
+      } else {
+        itm.className = 'item ok';
+        itm.innerHTML = '<i class="ti ti-check"></i>';
+      }
+      const m = mObj.el;
+      m.classList.remove('ok-flash', 'bad-flash');
+      void m.offsetWidth;
+      m.classList.add(isBad ? 'bad-flash' : 'ok-flash');
+      setTimeout(() => m.classList.remove('ok-flash', 'bad-flash'), 600);
+
+      if (isBad) {
+        const d = dotEls[pi][ei];
+        d.classList.remove('bad-alert');
+        void d.offsetWidth;
+        d.classList.add('bad-alert');
+        setTimeout(() => d.classList.remove('bad-alert'), 500);
+      }
+    }, t);
+  });
+
+  setTimeout(() => { if (itm.parentNode) itm.remove(); }, SPD + 300);
+}
+
+let beltTimers = [];
+function startBelts() {
+  beltTimers.forEach(clearTimeout);
+  beltTimers = [];
+  bwraps.forEach((_, pi) => {
+    function loop() {
+      spawnItem(pi);
+      const tid = setTimeout(loop, 1400 + Math.random() * 800);
+      beltTimers.push(tid);
+    }
+    const tid = setTimeout(loop, pi * 500);
+    beltTimers.push(tid);
+  });
+}
+
+async function openDetail(equipId) {
+  const dp = document.getElementById('dpanel');
+  dp.innerHTML = '<p class="hint">로딩 중...</p>';
+
+  const data = await apiFetch('/api/dashboard/equipment/' + equipId);
+  if (!data) { dp.innerHTML = '<p class="hint">데이터를 불러올 수 없습니다.</p>'; return; }
+
+  const eq = data.equipment;
+  const info = equipMap[equipId] || {};
+
+  let html = `<div class="dp-title">${esc(eq.name)} (${esc(eq.equipment_id)}) · ${esc(eq.process_name)} 공정</div>`;
+
+  const ngPct = info.ng_rate != null ? (info.ng_rate * 100).toFixed(1) : '0.0';
+  const col = riskColor(info.ng_rate || 0, info.claim_count || 0);
+  html += `<div class="dp-grid">
+    <div class="dp-cell active" style="border-color:${col}">
+      <div class="dp-pname">클레임 건수</div>
+      <div class="dp-num" style="color:${col}">${info.claim_count || 0}</div>
+      <div class="dp-sub">기간 내 접수</div>
+    </div>
+    <div class="dp-cell active" style="border-color:${col}">
+      <div class="dp-pname">NG율</div>
+      <div class="dp-num" style="color:${col}">${ngPct}%</div>
+      <div class="dp-bar-wrap"><div class="dp-bar" style="width:${ngPct}%;background:${col}"></div></div>
+    </div>
+    <div class="dp-cell">
+      <div class="dp-pname">처리 LOT</div>
+      <div class="dp-num">${info.total_lots || 0}</div>
+      <div class="dp-sub">NG ${info.ng_count || 0}건</div>
+    </div>
+    <div class="dp-cell">
+      <div class="dp-pname">불량 유형</div>
+      <div class="dp-num" style="font-size:13px">${(info.defect_types || '-').split(',').map(d => DEFECT_KR[d] || d).join(', ')}</div>
+    </div>
+  </div>`;
+
+  const claims = data.recent_claims || [];
+  if (claims.length > 0) {
+    html += `<div class="dp-section"><h4>관련 클레임 (최근 ${claims.length}건)</h4>
+    <table class="mini-tbl"><thead><tr><th>문서번호</th><th>불량</th><th>LOT</th><th>상태</th></tr></thead><tbody>`;
+    claims.forEach(c => {
+      html += `<tr>
+        <td>${esc(c.document_no || '-')}</td>
+        <td>${esc(DEFECT_KR[c.defect_type] || c.defect_type || '-')}</td>
+        <td>${esc(c.lot_no || '-')}</td>
+        <td>${esc(STATUS_KR[c.report_status] || c.report_status || '-')}</td>
+      </tr>`;
+    });
+    html += '</tbody></table></div>';
+  }
+
+  const hist = data.process_history || [];
+  if (hist.length > 0) {
+    html += `<div class="dp-section"><h4>최근 LOT 이력 (${Math.min(hist.length, 15)}건)</h4>
+    <table class="mini-tbl"><thead><tr><th>LOT</th><th>일자</th><th>근무</th><th>결과</th></tr></thead><tbody>`;
+    hist.slice(0, 15).forEach(h => {
+      const dt = h.production_date ? String(h.production_date).slice(0, 10) : '-';
+      const sh = h.shift === 'DAY' ? '주간' : h.shift === 'NIGHT' ? '야간' : (h.shift || '-');
+      html += `<tr>
+        <td>${esc(h.lot_no)}</td><td>${esc(dt)}</td><td>${esc(sh)}</td>
+        <td><span class="badge-s ${h.result}">${h.result}</span></td>
+      </tr>`;
+    });
+    html += '</tbody></table></div>';
+  }
+
+  if (claims.length === 0 && hist.length === 0) {
+    html += '<p class="hint" style="margin-top:.5rem">관련 이력이 없습니다.</p>';
+  }
+
+  dp.innerHTML = html;
+}
+
+loadDashboard();
+</script>
+</body>
+</html>

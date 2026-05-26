@@ -77,6 +77,22 @@ def _ensure_schema_extensions(cur):
             "ADD COLUMN part_category VARCHAR(20) DEFAULT 'FRAME' AFTER part_name"
         )
 
+    if _column_type(cur, "defect_reports", "suspected_equipment_id") is None:
+        cur.execute(
+            "ALTER TABLE defect_reports "
+            "ADD COLUMN suspected_equipment_id VARCHAR(20) AFTER approver_name"
+        )
+    if _column_type(cur, "defect_reports", "production_date") is None:
+        cur.execute(
+            "ALTER TABLE defect_reports "
+            "ADD COLUMN production_date DATE AFTER suspected_equipment_id"
+        )
+    if _column_type(cur, "defect_reports", "shift") is None:
+        cur.execute(
+            "ALTER TABLE defect_reports "
+            "ADD COLUMN shift VARCHAR(10) AFTER production_date"
+        )
+
     _ensure_index(
         cur,
         "defect_reports",
@@ -372,6 +388,163 @@ def _seed_connector_cases(conn):
         _logger.warning("커넥터 샘플 시드 실패 (무시됨): %s", e)
 
 
+def _seed_equipment(cur):
+    """line_layout.json 기반 설비 시드."""
+    cur.execute("SELECT COUNT(1) AS cnt FROM equipment")
+    if cur.fetchone()["cnt"] > 0:
+        return
+    layout_path = Path(__file__).parent.parent.parent / "config" / "line_layout.json"
+    if not layout_path.exists():
+        return
+    layout = json.loads(layout_path.read_text(encoding="utf-8"))
+    line_id = layout.get("line_id", "LINE-A")
+    for proc in layout.get("processes", []):
+        for eq in proc.get("equipment", []):
+            cur.execute(
+                "INSERT IGNORE INTO equipment "
+                "(equipment_id, name, equipment_type, process_id, process_name, line_id) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                (eq["equipment_id"], eq["name"], eq.get("type", ""),
+                 proc["process_id"], proc["process_name"], line_id),
+            )
+
+
+def _seed_production_lots(conn):
+    """합성 LOT + 공정 이력 시드 (시연용)."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(1) AS cnt FROM production_lots")
+        if cur.fetchone()["cnt"] > 0:
+            return
+
+    import random
+    from datetime import timedelta
+
+    random.seed(42)
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT equipment_id, process_id FROM equipment ORDER BY process_id")
+        equip_rows = cur.fetchall()
+
+    equip_by_proc = {}
+    for row in equip_rows:
+        equip_by_proc.setdefault(row["process_id"], []).append(row["equipment_id"])
+
+    process_order = ["PRESS", "DRILL", "HEMMING", "SEALING", "INSPECT"]
+
+    base_date = datetime(2026, 4, 1)
+    products = [
+        ("프론트 도어 이너 LH", "프레임"),
+        ("프론트 도어 이너 RH", "프레임"),
+        ("리어 도어 이너 LH",  "프레임"),
+        ("후드 이너 패널",     "프레임"),
+    ]
+    lot_count = 0
+    claim_lot_candidates = []
+
+    try:
+        for day_offset in range(50):
+            prod_date = base_date + timedelta(days=day_offset)
+            if prod_date.weekday() >= 6:
+                continue
+            for shift in ["DAY", "NIGHT"]:
+                prod_name, part_name = random.choice(products)
+                lot_no = f"LOT-{prod_date.strftime('%y%m%d')}-{shift[0]}{random.randint(1,9):01d}"
+
+                with get_conn() as c:
+                    with c.cursor() as cur:
+                        cur.execute(
+                            "INSERT IGNORE INTO production_lots "
+                            "(lot_no, product_name, part_name, production_date, shift, quantity) "
+                            "VALUES (%s, %s, %s, %s, %s, %s)",
+                            (lot_no, prod_name, part_name,
+                             prod_date.strftime("%Y-%m-%d"), shift,
+                             random.randint(80, 200)),
+                        )
+                        if cur.rowcount == 0:
+                            continue
+
+                        for i, proc_id in enumerate(process_order):
+                            candidates = equip_by_proc.get(proc_id, [])
+                            if not candidates:
+                                continue
+                            eq_id = random.choice(candidates)
+                            start_h = 8 if shift == "DAY" else 20
+                            started = prod_date.replace(hour=start_h) + timedelta(minutes=i * 25)
+                            finished = started + timedelta(minutes=random.randint(15, 25))
+                            result = "OK"
+                            if random.random() < 0.06:
+                                result = "NG"
+                            cur.execute(
+                                "INSERT INTO lot_process_history "
+                                "(lot_no, process_order, process_id, equipment_id, "
+                                "started_at, finished_at, result) "
+                                "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                                (lot_no, i + 1, proc_id, eq_id,
+                                 started.strftime("%Y-%m-%d %H:%M:%S"),
+                                 finished.strftime("%Y-%m-%d %H:%M:%S"),
+                                 result),
+                            )
+
+                    lot_count += 1
+                    claim_lot_candidates.append(
+                        (lot_no, prod_date.strftime("%Y-%m-%d"), shift)
+                    )
+
+        _link_claims_to_lots(conn, claim_lot_candidates)
+        _logger.info("합성 LOT %d건 시드 완료", lot_count)
+
+    except Exception as e:
+        _logger.warning("LOT 시드 실패 (무시됨): %s", e)
+
+
+def _link_claims_to_lots(conn, lot_candidates):
+    """기존 클레임 보고서에 LOT/설비/생산일 역연결."""
+    if not lot_candidates:
+        return
+    import random
+    random.seed(99)
+
+    layout_path = Path(__file__).parent.parent.parent / "config" / "line_layout.json"
+    defect_proc_map = {}
+    if layout_path.exists():
+        layout = json.loads(layout_path.read_text(encoding="utf-8"))
+        defect_proc_map = layout.get("defect_process_map", {})
+
+    with get_conn() as c:
+        with c.cursor() as cur:
+            cur.execute(
+                "SELECT report_id, defect_type, lot_no FROM defect_reports "
+                "WHERE lot_no IS NULL OR lot_no = ''"
+            )
+            reports = cur.fetchall()
+
+    for report in reports:
+        lot_no, prod_date, shift = random.choice(lot_candidates)
+
+        proc_id = defect_proc_map.get(report["defect_type"])
+        eq_id = None
+        if proc_id:
+            with get_conn() as c:
+                with c.cursor() as cur:
+                    cur.execute(
+                        "SELECT equipment_id FROM lot_process_history "
+                        "WHERE lot_no = %s AND process_id = %s LIMIT 1",
+                        (lot_no, proc_id),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        eq_id = row["equipment_id"]
+
+        with get_conn() as c:
+            with c.cursor() as cur:
+                cur.execute(
+                    "UPDATE defect_reports SET lot_no = %s, production_date = %s, "
+                    "shift = %s, suspected_equipment_id = %s "
+                    "WHERE report_id = %s",
+                    (lot_no, prod_date, shift, eq_id, report["report_id"]),
+                )
+
+
 _pool_lock = threading.Lock()
 _pool: list = []
 _POOL_MAX   = 10
@@ -533,10 +706,52 @@ def init_db():
                     value    VARCHAR(255) NOT NULL DEFAULT ''
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS equipment (
+                    equipment_id  VARCHAR(20)  PRIMARY KEY,
+                    name          VARCHAR(100) NOT NULL,
+                    equipment_type VARCHAR(30),
+                    process_id    VARCHAR(20)  NOT NULL,
+                    process_name  VARCHAR(50)  NOT NULL,
+                    line_id       VARCHAR(20)  NOT NULL DEFAULT 'LINE-A',
+                    is_active     TINYINT      NOT NULL DEFAULT 1,
+                    INDEX idx_equip_process (process_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS production_lots (
+                    lot_no          VARCHAR(50)  PRIMARY KEY,
+                    product_name    VARCHAR(200),
+                    part_name       VARCHAR(200),
+                    production_date DATE         NOT NULL,
+                    shift           VARCHAR(10)  NOT NULL DEFAULT 'DAY',
+                    line_id         VARCHAR(20)  NOT NULL DEFAULT 'LINE-A',
+                    quantity         INT          NOT NULL DEFAULT 0,
+                    status          VARCHAR(20)  NOT NULL DEFAULT 'produced',
+                    INDEX idx_lot_date (production_date)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS lot_process_history (
+                    id              INT          PRIMARY KEY AUTO_INCREMENT,
+                    lot_no          VARCHAR(50)  NOT NULL,
+                    process_order   INT          NOT NULL,
+                    process_id      VARCHAR(20)  NOT NULL,
+                    equipment_id    VARCHAR(20)  NOT NULL,
+                    started_at      DATETIME,
+                    finished_at     DATETIME,
+                    result          VARCHAR(20)  NOT NULL DEFAULT 'OK',
+                    FOREIGN KEY (lot_no) REFERENCES production_lots(lot_no),
+                    FOREIGN KEY (equipment_id) REFERENCES equipment(equipment_id),
+                    INDEX idx_lph_lot (lot_no),
+                    INDEX idx_lph_equip (equipment_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
             _seed_defect_types(cur)
             _seed_sample_cases(cur)
             _seed_document_sequences(cur)
             _seed_admin_user(cur)
+            _seed_equipment(cur)
 
     # DDL(ALTER TABLE)은 트랜잭션 밖 별도 커넥션에서 실행
     with get_conn() as conn:
@@ -546,6 +761,10 @@ def init_db():
     # 커넥터 샘플 케이스 — 별도 커넥션에서 실행 (트랜잭션 독립)
     with get_conn() as conn:
         _seed_connector_cases(conn)
+
+    # 합성 LOT + 공정 이력 시드
+    with get_conn() as conn:
+        _seed_production_lots(conn)
 
 
 # ── defect_types 조회 ────────────────────────────────
