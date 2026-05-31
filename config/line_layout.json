@@ -1,0 +1,58 @@
+{
+  "line_id": "LINE-A",
+  "line_name": "프레임 생산라인 A",
+  "part_category": "FRAME",
+  "processes": [
+    {
+      "process_id": "PRESS",
+      "process_name": "프레스",
+      "order": 1,
+      "equipment": [
+        {"equipment_id": "PRS-L1", "name": "프레스 1호기", "type": "press"},
+        {"equipment_id": "PRS-L2", "name": "프레스 2호기", "type": "press"}
+      ]
+    },
+    {
+      "process_id": "DRILL",
+      "process_name": "드릴링/피어싱",
+      "order": 2,
+      "equipment": [
+        {"equipment_id": "DRL-D1", "name": "드릴 1호기", "type": "drill"},
+        {"equipment_id": "DRL-D2", "name": "드릴 2호기", "type": "drill"}
+      ]
+    },
+    {
+      "process_id": "HEMMING",
+      "process_name": "헤밍",
+      "order": 3,
+      "equipment": [
+        {"equipment_id": "HEM-M01", "name": "헤밍기 1호기", "type": "hemming"},
+        {"equipment_id": "HEM-M02", "name": "헤밍기 2호기", "type": "hemming"},
+        {"equipment_id": "HEM-M03", "name": "헤밍기 3호기", "type": "hemming"}
+      ]
+    },
+    {
+      "process_id": "SEALING",
+      "process_name": "실링",
+      "order": 4,
+      "equipment": [
+        {"equipment_id": "SEL-N01", "name": "실링 도포기 1호기", "type": "sealing"},
+        {"equipment_id": "SEL-N02", "name": "실링 도포기 2호기", "type": "sealing"}
+      ]
+    },
+    {
+      "process_id": "INSPECT",
+      "process_name": "최종검사",
+      "order": 5,
+      "equipment": [
+        {"equipment_id": "INS-Q1", "name": "검사대 1호기", "type": "inspection"}
+      ]
+    }
+  ],
+  "defect_process_map": {
+    "HEMMING":      "HEMMING",
+    "HOLE_DEFORM":  "DRILL",
+    "OUTER_DAMAGE": "PRESS",
+    "SEALING":      "SEALING"
+  }
+}
